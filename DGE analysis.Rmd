@@ -1,0 +1,519 @@
+---
+title: "Analysis"
+author: "Beatriz Manso"
+date: '2022-06-02'
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load Libraries:
+```{r}
+library(affy)
+library(affyPLM)
+library(limma)
+library(Biobase)
+library(Biostrings)
+library(genefilter)
+library(ggplot2)
+
+
+```
+
+# Load Data Into R
+
+```{r}
+celpath = "C:/Users/manso/OneDrive - University of West London/MSc Bioinformatics - UWL/6.BGA - Bioinformatics and Genome Analysis/ASSESSMENTS/A2 - Gene ExpressionVariant - Experiment Report/data"
+
+# import CEL files containing raw probe-level data into an R AffyBatch object
+data = affy::ReadAffy(celfile.path=celpath)
+data
+```
+We have 6 samples, 3 control replicates and 3 Low Iron Diet (LID) replicates
+
+# Data Exploration
+
+## Retrieve intensities
+
+```{r}
+expr = affy::exprs(data)
+int = affy::intensity(data)
+```
+
+```{r}
+expr[1:5,]
+int[1:5,]
+```
+
+```{r}
+affy::pm(data)[1:5,]
+```
+pm() returns probe numbers (column at the left), which refer to the original order of the probes.
+
+## Retrieve sample annotation 
+```{r}
+ph = data@phenoData
+ph
+```
+
+```{r}
+ph@data
+```
+
+## Retrieve probe annotation
+
+```{r}
+feat = data@featureData
+feat
+feat@data
+```
+ featureData has not been defined.
+
+
+## Retrieve experiment annotation
+
+```{r}
+exp = data@experimentData
+exp
+```
+featureData has not been defined.
+
+```{r}
+length(affy::probeNames(data))
+```
+
+# Quality Control
+
+
+## Give the samples informative names
+
+```{r}
+ph@data[ ,1] = c("control1","control2","control3","LID1","LID2","LID3")
+ph
+```
+Our samples consist of 3 replicates for each group: 3 controls and 3 Low Iron Diet (LID)
+
+## Raw intensities
+
+```{r}
+dir.create("Raw_Intensity")
+for (i in 1:6)
+{
+name = paste("Raw_Intensity/",ph@data$sample[i],".jpg",sep="")
+jpeg(name)
+image(data[,i],main=ph@data$sample[i])
+dev.off()
+}
+```
+```{r}
+op = par(mfrow = c(2,3))
+for (i in 1:6){image(data[,i],main=ph@data$sample[i])}
+```
+
+## Chip pseudo images
+
+```{r}
+Pset <- fitPLM(data)
+```
+
+- Based on weights:
+
+```{r}
+dir.create("Chip_PseudoImage_weights")
+for (i in 1:6)
+{
+name = paste("Chip_PseudoImage_weights/", ph@data$sample[i],".jpg",sep="")
+jpeg(name)
+image(Pset,which=i, main=ph@data$sample[i])
+dev.off()
+}
+
+op = par(mfrow = c(2,3))
+for (i in 1:6){image(Pset,which=i,main=ph@data$sample[i])}
+```
+Weights represent how much the original data contribute to the model:
+Values vary between 0 and 1, the smaller the weight of a probe
+-> the more the probe is not showing the typical behavior that it shows on the other arrays
+-> the more its intensity can be considered an outlier
+
+
+
+- Based on residuals:
+
+```{r}
+dir.create("Chip_PseudoImage_residuals")
+for (i in 1:6)
+{
+name = paste("Chip_PseudoImage_residuals/",ph@data$sample[i],".jpg",sep="")
+jpeg(name)
+image(Pset,which=i,type="resids",main=ph@data$sample[i])
+dev.off()
+}
+op = par(mfrow = c(2,3))
+for (i in 1:6){image(Pset,which=i,type='resids',main=ph@data$sample[i])}
+
+```
+
+
+
+## Histograms
+
+```{r}
+pmexp = affy::pm(data)
+
+sampleNames = vector()
+logs = vector()
+
+for (i in 1:6)
+{
+sampleNames = c(sampleNames,rep(ph@data[i,1],dim(pmexp)[1]))
+logs = c(logs,log2(pmexp[,i]))
+}
+
+logData = data.frame(logInt=logs,sampleName=sampleNames)
+
+dataHist2 = ggplot(logData, aes(logInt, colour = sampleName)) 
+dataHist2 + geom_density()
+```
+
+Histogram plots the distribution of log base 2 intensities (log2(PMij) for array i and probe j) of perfect match probes for comparison of probe intensity behavior between different arrays. 
+We can see that our data needs to be normalized as our samples differ in shape and center of distribution.
+
+
+## Box plots
+We can also create boxplot to look at the distribution of our data:
+
+```{r}
+
+sampleNames = vector()
+logs = vector()
+for (i in 1:6)
+{
+sampleNames = c(sampleNames,rep(ph@data[i,1],dim(pmexp)[1]))
+logs = c(logs,log2(pmexp[,i]))
+}
+
+logData = data.frame(logInt=logs,sampleName=sampleNames)
+
+
+dataBox = ggplot(logData,aes(sampleName,logInt))
+dataBox + geom_boxplot()
+```
+Differences in shape or center of the boxes indicate that normalization of the data is required.
+
+## MA plots
+
+```{r}
+dir.create("MA_plots")
+for (i in 1:6)
+{
+name = paste("MA_plots/",ph@data$sample[i],".jpg",sep="")
+jpeg(name)
+affy::MAplot(data, which=i)
+dev.off()
+}
+
+op = par(mfrow = c(2,3))
+for (i in 1:6){affy::MAplot(data, which=i)}
+```
+
+
+The cloud of data points in the MA-plot should be centered around M=0 (blue line). This is because we assume that the majority of the genes is not DE and that the number of upregulated genes is similar to the number of downregulated genes. 
+
+
+Alternative QC Analysis:
+```{r}
+library(arrayQualityMetrics)
+arrayQualityMetrics(data, force=TRUE)
+```
+arrayQualityMetrics() creates a full quality report for our 6 samples: index.html 
+It contains:
+- Distance between arrays, PCA plots
+- Array intensity distributions - box plots and density plots
+- Variance mean dependence plots
+- Individual array quality MA plots
+- Outlier detection for MA plots
+
+
+# Data Normalization
+
+Sources of noise in microarray experiments:
+- Different amounts of RNA used for labeling and hybridization
+- Imperfections on the array surface
+- Imperfect synthesis of the probes
+- Differences in hybridization conditions
+
+Differences between the samples that are due to noise rather than true biological variability should be removed in order to make biologically meaningfull conclusions about the data.
+
+
+
+```{r}
+data.rma = rma(data)
+
+data.matrix = exprs(data.rma)
+```
+Robust Multiarray Average (RMA):
+
+background correction
+quantile normalisation
+probe summarisation (i.e. across transcripts)
+log (base 2) transformation
+
+# Add Annotation
+
+```{r}
+library(affycoretools)
+library(pd.moe430a)
+library(moe430a.db)
+data.annot = annotateEset(data.rma, moe430a.db)
+data.annot
+```
+
+
+
+# Checking the effect of the normalization
+
+
+```{r}
+bgcorr = affy::pm(bg.correct(data,method="rma"))
+
+sampleNames = vector()
+logs = vector()
+corrlogs = vector()
+for (i in 1:6)
+{
+sampleNames = c(sampleNames,rep(ph@data[i,1],dim(pmexp)[1]))
+logs = c(logs,log2(pmexp[,i]))
+corrlogs = c(corrlogs,log2(bgcorr[,i]))
+}
+
+corrData = data.frame(logInt=logs,bgcorr_logInt=corrlogs,sampleName=sampleNames)
+
+dataScatter = ggplot(corrData, aes(logInt,bgcorr_logInt))
+dataScatter + geom_point() + geom_abline(intercept=0,slope=1,colour='red') + facet_grid(.~sampleName)
+
+```
+
+The bg.correct() method allows us to perform only a background correction. We want the one that is used by RMA and we want to apply it only on the PM intensities since RMA only uses the PM intensities.
+
+We can see that only the low intensities are strongly affected by the background subtraction
+
+
+## Comparing raw and normalized data using boxplots
+
+
+```{r}
+sampleNames = vector()
+normlogs = vector()
+for (i in 1:6)
+{
+sampleNames = c(sampleNames,rep(ph@data[i,1],dim(data.matrix)[1]))
+normlogs = c(normlogs,data.matrix[,i])
+}
+normData = data.frame(norm_logInt=normlogs,sampleName=sampleNames)
+
+dataBox = ggplot(normData, aes(sampleName,norm_logInt))
+dataBox + geom_boxplot() + ylim(2,16) + ggtitle("after normalization")
+
+dataBox = ggplot(logData,aes(sampleName,logInt))
+dataBox + geom_boxplot() + ylim(2,16) + ggtitle("before normalization")
+
+```
+
+After normalization, none of the samples should stand out from the rest. 
+
+## Comparing raw and normalized data using MA plots
+
+```{r}
+dir.create("Norm_MA_plots")
+for (i in 1:6)
+{
+name = paste("Norm_MA_plots/",i,".jpg",sep="")
+jpeg(name)
+MAplot(data.rma,which=i)
+dev.off()
+}
+op = par(mfrow = c(2,3))
+for (i in 1:6){MAplot(data.rma, which=i)}
+```
+
+
+## PCA plot
+Check whether the overall variability of the samples reflects their grouping, you can perform a Principal Component Analysis
+
+
+```{r}
+
+color=c('blue','blue','blue','red','red','red')
+data.pca = prcomp(t(data.matrix), scale.=TRUE, center=TRUE)
+
+library(ggfortify)
+data.pca.plot <- autoplot(data.pca,colour=color)
+  
+data.pca.plot
+```
+
+
+There isn't a clearer distribution between our groups of samples. Maybe if we had more replicate samples for each group we'd have a better distribution.
+
+
+
+# Identification of DE genes
+
+We'll use a t-test to fit a linear model to the expression data of each gene. The expression data can be log-ratios or log-intensities.
+
+## Assign samples to groups and set up design matrix
+```{r}
+ph@data[ ,2] = c("control","control","control","LID","LID","LID")
+colnames(ph@data)[2]="treatment"
+ph@data
+
+groups = ph@data$treatment
+f = factor(groups,levels=c("control","LID"))
+
+design = model.matrix(~0 + f)
+colnames(design) = c("control","LID")
+```
+
+## Fit linear model
+
+```{r}
+data.fit = lmFit(data.annot, design)
+data.fit$coefficients[1:10,]
+```
+The first column contains the mean log expression in control samples.
+The second column contains the mean log expression in mutant samples.
+
+The moderated t-test is performed on each gene by using the eBayes() method.
+
+##Set up contrasts and recalculate model coefficients
+
+```{r}
+contrast.matrix = makeContrasts(LID-control,levels=design)
+data.fit.con = contrasts.fit(data.fit,  contrast.matrix)
+```
+
+# Compute statistics and table of top significant genes
+
+```{r}
+data.fit.eb = eBayes(data.fit.con, 0.01)
+
+data.fit.eb$coefficients[1:10,]
+```
+coefficient of the contrast: it's the difference between the mean log expression in LID samples and the mean log expression in control samples. This difference is usually called a log fold change.
+
+-  view the t-statistics and p-values of the moderated t-test for the first 10 probe sets:
+
+```{r}
+data.fit.eb$t[1:10,]
+data.fit.eb$p.value[1:10,1]
+```
+
+# Generating a Volcano plot
+
+The best way to decide on the number of DE genes you are going to select is via a Volcano plot.
+
+```{r}
+name = "Volcano.jpg"
+jpeg(name)
+volcanoplot(data.fit.eb,highlight=10)
+dev.off()
+
+```
+The plot is stored in the working directory as "Volcano.jpg".
+
+Volcano plots arrange genes along biological and statistical significance.
+
+The X-axis gives the log fold change between the two groups (log: so that up and down regulation appear symmetric), and the Y-axis represents the p-value of a t-test comparing samples (on a negative log scale so smaller p-values appear higher up)
+
+
+# Adjusting for multiple testing for a single comparison 
+
+- We assumed that most genes are not differentially expressed
+- Report the top 200 Differentially Expressed genes:
+
+```{r}
+T = topTable(data.fit.eb, adjust="fdr", sort.by="B", number=200)
+```
+
+topTable() method returns a table ranking the genes according to evidence for differential expression.
+
+- The adjustment is done using BH which is Benjamini and Hochberg's method to control the FDR.
+
+## Histogram of adjusted P-value counts:
+
+```{r}
+T2 = topTable(data.fit.eb, adjust="fdr", sort.by="B", number=Inf)
+
+hist(T2$adj.P.Val, col = "grey", border = "white", xlab = "P-adj",
+  ylab = "Number of genes", main = "P-adj value distribution")
+```
+
+topTable() method returns a table ranking the genes according to evidence for differential expression.
+
+- The adjustment is done using BH which is Benjamini and Hochberg's method to control the FDR.
+
+
+Save topTable:
+
+```{r}
+write.csv(T2, file = "TopTable.csv")
+
+```
+
+```{r}
+dT <- decideTests(data.fit.eb, p.value=0.05, method="global",
+adjust.method="BH")
+```
+
+
+```{r}
+t.good <- which(!is.na(data.fit.eb$F)) # filter out bad probes
+qqt(data.fit.eb$t[t.good], data.fit.eb$df.total[t.good], main="Moderated t statistic")
+```
+
+```{r}
+# MD plot (log fold change vs mean log expression)
+# highlight statistically significant (p-adj < 0.05) probes
+plotMD(data.fit.eb, column=ct, status=dT[,ct], legend=F, pch=20, cex=1)
+abline(h=0)
+```
+
+
+```{r}
+topgenes = T[T[, "adj.P.Val"] < 0.05, ]
+dim(topgenes)
+```
+
+```{r}
+topups = topgenes[topgenes[, "logFC"] > 1, ]
+dim(topups)
+topdowns = topgenes[topgenes[, "logFC"] < -1, ]
+dim(topdowns)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
